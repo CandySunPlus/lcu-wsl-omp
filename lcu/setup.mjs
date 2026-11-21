@@ -15,7 +15,7 @@ import { install as installApprovalMod } from './claude_mod.mjs';
 import { install as hideHostOnlyTools } from './claude_visibility.mjs';
 import { accountHome, isFile, lstat, real, shellQuote } from './fsutil.mjs';
 import { approvalNote, question as crossTurnQuestion, readCrossTurn, setCrossTurn } from './cross_turn.mjs';
-import { configureAntigravity, configureDsh, configureHermes, configureJunie, configureOmp, DSH_DEFAULT_PROFILE, dshExecutable, validDshProfile } from './harness_setup.mjs';
+import { configureAntigravity, configureDsh, configureGrok, configureHermes, configureJunie, configureOmp, DSH_DEFAULT_PROFILE, dshExecutable, validDshProfile } from './harness_setup.mjs';
 import { withLock } from './lock.mjs';
 import { ask, say, warn } from './terminal.mjs';
 
@@ -41,6 +41,7 @@ export const CLIENTS = {
   omp: { label: 'Oh My Pi', executable: 'omp', detectPath: '.omp', mcpAgent: '' },
   hermes: { label: 'Hermes', executable: 'hermes', detectPath: '.hermes', mcpAgent: '' },
   dsh: { label: 'DeepSeek Harness', executable: 'dsh', detectPath: '.dsh', mcpAgent: '' },
+  grok: { label: 'Grok CLI', executable: 'grok', detectPath: '.grok', mcpAgent: '', platforms: ['darwin'] },
   // Junie's and Antigravity's relays meet their hooks on a Unix socket.
   junie: { label: 'Junie', executable: 'junie', detectPath: '.junie', mcpAgent: '', platforms: ['darwin', 'linux'] },
   antigravity: { label: 'Antigravity', executable: 'agy',
@@ -55,10 +56,10 @@ export const supportedClients = () => Object.keys(CLIENTS).filter(supportedHere)
 export const ALIASES = { claude: 'claude-code', 'oh-my-pi': 'omp', 'hermes-agent': 'hermes', 'deepseek-harness': 'dsh', agy: 'antigravity' };
 // Harnesses whose native registration needs their own executable; Codex and Claude Code register through
 // add-mcp and their config files, and Junie and Antigravity through their config files, without the CLI installed.
-const NEEDS_BINARY = ['pi', 'omp', 'hermes', 'dsh'];
+const NEEDS_BINARY = ['pi', 'omp', 'hermes', 'dsh', 'grok'];
 // Native harness plugins are profile-scoped, and Junie reads hooks only from the user's config; project scope is
 // unsupported.
-const USER_ONLY_AGENTS = ['omp', 'hermes', 'dsh', 'junie'];
+const USER_ONLY_AGENTS = ['omp', 'hermes', 'dsh', 'junie', 'grok'];
 
 // Shell and Windows command-line quoting for the commands LCU prints and registers.
 export const shellJoin = (args) => args.map(shellQuote).join(' ');
@@ -289,7 +290,7 @@ export function saveSetupState(home, { chrome, audio, approval = 'ask', pending 
 
 /** PATH plus the user-level directories harness installers use, for a harness installed after login. */
 function harnessSearchPath(home, path = process.env.PATH ?? '') {
-  const extra = ['.local/bin', '.bun/bin', '.npm-global/bin', '.cargo/bin'].map((name) => join(home, name));
+  const extra = ['.local/bin', '.bun/bin', '.npm-global/bin', '.cargo/bin', '.grok/bin'].map((name) => join(home, name));
   return [...new Set([...path.split(delimiter).filter(Boolean), ...extra])].join(delimiter);
 }
 
@@ -309,6 +310,7 @@ export function installerEnvironment(home, names, environ = process.env) {
     }
   }
   const supported = [];
+  if (names.includes('grok')) supported.push('GROK_HOME');
   if (names.includes('codex')) supported.push('CODEX_HOME');
   if (names.includes('hermes')) supported.push('HERMES_HOME');
   if (names.includes('omp')) supported.push('PI_CODING_AGENT_DIR');
@@ -545,10 +547,11 @@ export async function configure(names, home, command, toolsRoot, releaseRoot,
 
   for (const name of names) {
     const client = CLIENTS[name];
-    if (name === 'omp' || name === 'hermes' || name === 'dsh') {
+    if (['omp', 'hermes', 'dsh', 'grok'].includes(name)) {
       try {
         if (name === 'omp') configureOmp(home, command, releaseRoot, { scope, project, env });
         else if (name === 'hermes') configureHermes(home, command, node, releaseRoot, { scope, project, env });
+        else if (name === 'grok') configureGrok(home, command, node, releaseRoot, { scope, env });
         else configureDsh(home, command, releaseRoot, { scope, env, profile: dshProfile });
         say(name === 'dsh' ? `${client.label}: plugin registered in profile ${dshProfile} ` +
           `(remove it with \`dsh plugin --profile ${dshProfile} remove lcu-computer-use\`).` : `${client.label}: plugin registered.`);
@@ -920,7 +923,7 @@ const agentScopes = (name) => (USER_ONLY_AGENTS.includes(name) ? 'user' : 'user,
 
 function validateAgentScope(names, scope) {
   if (scope === 'project' && names.some((name) => USER_ONLY_AGENTS.includes(name))) {
-    throw new Error('Oh My Pi, Hermes and DeepSeek Harness native plugins are profile-scoped, and Junie reads hooks only from ~/.junie/config.json. Use --scope user with the intended profile; project scope is not supported.');
+    throw new Error('Oh My Pi, Hermes, DeepSeek Harness and Grok native plugins are profile-scoped, and Junie reads hooks only from ~/.junie/config.json. Use --scope user with the intended profile; project scope is not supported.');
   }
 }
 
