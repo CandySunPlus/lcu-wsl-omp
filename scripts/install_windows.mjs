@@ -1,7 +1,6 @@
-// Install thin LCU beside the current account's official Windows Store app. scripts/install.ps1 runs this on
-// the app's own node.exe after checking the registered package. The registered MSIX stays intact; its
-// protected WindowsApps directory does not permit direct execution, so LCU runs an unchanged private copy
-// (`<prefix>\apps\<inventory digest>\app`) whose source-derived inventory it records and checks.
+// Install thin LCU beside the current account's official Windows Store app. scripts/install.ps1 starts
+// this with the app's own node.exe after checking its Store identity. The registered MSIX stays intact.
+// The default uses a validated private copy; --in-place can use the original when Windows allows it.
 import {
   closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync,
   realpathSync, renameSync, rmSync, writeFileSync, writeSync,
@@ -99,26 +98,26 @@ export function generationInUse(prefix, generation) {
 }
 
 /**
- * Check the selected app's native-pipe host layout read-only, before anything is copied. The structural
- * analyzer runs on a temporary copy of the app's own node.exe; the selected app itself is only read.
+ * Check the selected app's native-pipe host layout read-only before writing the prefix. In copy mode the
+ * analyzer runs on a temporary Node because WindowsApps might refuse to execute the original.
  */
-export function preflightHost(selected) {
+export function preflightHost(selected, { inPlace = false } = {}) {
   const node = component(selected.app, NODE_MEMBER);
   if (redirected(node) || !existsSync(node)) {
     throw new Error('The selected ChatGPT app has no usable app/resources/cua_node/bin/node.exe.');
   }
-  const scratch = mkdtempSync(join(tmpdir(), 'lcu-host-check-'));
+  const scratch = inPlace ? null : mkdtempSync(join(tmpdir(), 'lcu-host-check-'));
   try {
-    const staged = join(scratch, 'node.exe');
-    copyFile(node, staged);
-    deps.planOriginalHost(selected.app, { node: staged });
+    const executable = scratch ? join(scratch, 'node.exe') : node;
+    if (scratch) copyFile(node, executable);
+    deps.planOriginalHost(selected.app, { node: executable });
   } catch (error) {
     if (error?.message?.startsWith('Required Windows host layout')) {
       throw new Error(`${error.message} (observed ChatGPT app ${selected.version}, runtime ${selected.runtimeVersion}; nothing was installed)`);
     }
     throw error;
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
 }
 
@@ -166,8 +165,8 @@ export function checkedPrefix(path) {
   return prefix;
 }
 
-/** Select, check, copy and publish; returns the new release directory. */
-export async function install(prefixPath) {
+/** Select and check the Store package, then publish a new release. */
+export async function install(prefixPath, { inPlace = false } = {}) {
   if (deps.platform() !== 'win32') throw new Error('The Windows installer must run in Windows 11 x64.');
   const arch = deps.architecture('windows');
   deps.verify(deps.source, arch, 'windows');
@@ -189,9 +188,9 @@ export async function install(prefixPath) {
   const inventory = { ...selected.inventory };
   const digest = inventorySha256(inventory);
   if (digest !== selected.inventoryDigest) throw new Error('Selected Windows application inventory changed after validation.');
-  // Fail on an unrecognised host layout before the 2 GB copy or any prefix write.
+  // Refuse an unrecognised layout before writing the prefix or copying the app.
   process.stderr.write('LCU: Checking the original Windows native host layout...\n');
-  preflightHost(selected);
+  preflightHost(selected, { inPlace });
   mkdirSync(prefix, { recursive: true });
   writeFileSync(join(prefix, '.lcu-install'), '', { flag: 'a' });
   // One install at a time per prefix: a generation another run creates or reuses is never removed by this one.
@@ -200,20 +199,22 @@ export async function install(prefixPath) {
   const release = await acquire(lockPath, { wait: 0, busy: () => new Error('Another LCU install is already running for this ' +
     'prefix; wait for it to finish and run this install again.') });
   try {
-    return await publish(prefix, arch, selected, inventory, digest);
+    return await publish(prefix, arch, selected, inventory, digest, inPlace);
   } finally {
     release();
   }
 }
 
-async function publish(prefix, arch, selected, inventory, digest) {
+async function publish(prefix, arch, selected, inventory, digest, inPlace) {
   const apps = join(prefix, 'apps');
-  if (redirected(apps)) throw new Error(`Refusing a redirected Windows app generation directory: ${apps}`);
-  mkdirSync(apps, { recursive: true });
-  const generation = join(apps, digest);
-  if (redirected(generation)) throw new Error(`Refusing a redirected Windows app generation: ${generation}`);
+  const generation = inPlace ? null : join(apps, digest);
+  if (generation) {
+    if (redirected(apps)) throw new Error(`Refusing a redirected Windows app generation directory: ${apps}`);
+    mkdirSync(apps, { recursive: true });
+    if (redirected(generation)) throw new Error(`Refusing a redirected Windows app generation: ${generation}`);
+  }
   let createdGeneration = false;
-  if (existsSync(generation)) {
+  if (generation && existsSync(generation)) {
     const inventoryPath = join(generation, 'inventory.json');
     if (redirected(inventoryPath) || !existsSync(inventoryPath)) throw new Error('Managed Windows application inventory is missing or redirected.');
     let recorded;
@@ -224,7 +225,7 @@ async function publish(prefix, arch, selected, inventory, digest) {
     }
     if (inventorySha256(recorded) !== digest) throw new Error('Managed Windows application inventory differs from the selected Store app.');
     validatedCopy(join(generation, 'app'), selected);
-  } else {
+  } else if (generation) {
     const stage = join(apps, `.${newId(8)}`);
     try {
       mkdirSync(stage);
@@ -242,7 +243,7 @@ async function publish(prefix, arch, selected, inventory, digest) {
       throw error;
     }
   }
-  const app = join(generation, 'app');
+  const app = generation ? join(generation, 'app') : selected.app;
   let release = null;
   const previous = new Map();
   const replaced = [];
@@ -256,11 +257,12 @@ async function publish(prefix, arch, selected, inventory, digest) {
     copyTree(deps.source, release);
     deps.verify(release, arch, 'windows');
     deps.materializeOriginalHost(app, join(release, 'lcu-host'));
+    if (inPlace) writeFileSync(join(release, 'app-inventory.json'), `${canonicalJson(inventory)}\n`);
     writeFileSync(join(release, 'installation.json'), `${JSON.stringify({
       platform: 'windows', architecture: 'x64', app, package_version: selected.version, runtime: selected.runtimeVersion,
       sha256: digest,
+      ...(inPlace ? { app_source: 'store' } : {}),
     }, null, 2)}\n`);
-    // The managed copy's Node runs LCU: the registered package's own directory does not allow execution.
     const node = component(app, NODE_MEMBER);
     writeFileSync(join(release, 'node-path'), `${node}\r\n`);
     await deps.paths(release);
@@ -298,6 +300,7 @@ export async function main(argv) {
   const { values } = parseArgs({ args: argv, strict: true, options: {
     prefix: { type: 'string', default: join(process.env.LOCALAPPDATA || join(homedir(), 'AppData/Local'), 'LCU') },
     'runtime-only': { type: 'boolean' }, agent: { type: 'string', multiple: true, default: [] },
+    'in-place': { type: 'boolean' },
     chrome: { type: 'boolean' }, 'no-chrome': { type: 'boolean' }, audio: { type: 'boolean' }, 'no-audio': { type: 'boolean' },
     yes: { type: 'boolean' }, scope: { type: 'string', default: 'user' }, project: { type: 'string' },
   } });
@@ -312,7 +315,7 @@ export async function main(argv) {
   if (!values['runtime-only'] && !values.agent.length) {
     throw Object.assign(new Error(`Choose --agent NAME or --runtime-only. Agents: ${AGENTS.join(', ')}`), { usage: true });
   }
-  const release = await install(values.prefix);
+  const release = await install(values.prefix, { inPlace: values['in-place'] });
   process.stdout.write(`LCU installed: ${join(values.prefix, 'lcu.cmd')}\n`);
   if (values['runtime-only']) return 0;
   const args = ['--prefix', values.prefix, '--session', 'direct', '--scope', values.scope];

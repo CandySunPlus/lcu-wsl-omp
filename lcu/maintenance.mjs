@@ -89,6 +89,7 @@ function generationDirectory(release, apps, windows) {
   // A Linux release using an installed app in place, outside <prefix>/apps. An absolute path that resolves under
   // <prefix>/apps (for example an app copy left by 0.7.0 and passed to --existing-app) is a generation to keep.
   if (!windows && isAbsolute(app) && !('sha256' in descriptor)) return null;
+  if (windows && descriptor.app_source === 'store' && isAbsolute(app)) return null;
   throw new Error(`Release ${basename(release)} references an app outside ${appsReal}.`);
 }
 

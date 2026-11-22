@@ -27,7 +27,8 @@ function storeApp(t) {
     write(join(app, relative), relative.endsWith('cua_node/manifest.json')
       ? JSON.stringify({ platform: 'windows', arch: 'x64', runtime_archive_version: RUNTIME }) : relative);
   }
-  const registered = { Name: PACKAGE_NAME, Publisher: PACKAGE_PUBLISHER, Version: VERSION, Architecture: 'X64', SignatureKind: 'Store', InstallLocation: app };
+  const registered = { Name: PACKAGE_NAME, Publisher: PACKAGE_PUBLISHER, Version: VERSION, Architecture: 'X64',
+    SignatureKind: 'Store', Status: 'Ok', IsDevelopmentMode: false, InstallLocation: app };
   return { app, registered };
 }
 
@@ -259,6 +260,24 @@ test('the descriptor must name the managed generation and its intact inventory',
   assert.throws(() => paths(r.root), /not the managed private generation/);
   writeFileSync(inventoryPath, JSON.stringify({ '.': { type: 'directory' } }));
   assert.throws(() => paths(r.root), /inventory does not match its descriptor/);
+});
+
+test('an in-place release requires the current intact Store registration and recorded bytes', (t) => {
+  const { app, registered } = storeApp(t);
+  const query = onWindows(t, registered);
+  const root = join(temporary(t), 'releases', 'in-place');
+  const inventory = applicationInventory(app);
+  write(join(root, 'runtime.lock.json'), JSON.stringify({ platforms: { windows: { architectures: { x64: {} } } } }));
+  write(join(root, 'app-inventory.json'), JSON.stringify(inventory));
+  const descriptor = { platform: 'windows', app_source: 'store', app, architecture: 'x64', package_version: VERSION,
+    runtime: RUNTIME, sha256: inventorySha256(inventory) };
+  assert.equal(paths(root, descriptor).app, app);
+  assert.throws(() => paths(root, { ...descriptor, app: join(root, 'other') }), /Store app changed/);
+  query.mock.mockImplementation(() => ({ status: 0, stdout: JSON.stringify({ ...registered, Status: 'Modified' }) }));
+  assert.throws(() => paths(root, descriptor), /intact official Windows x64 Store app/);
+  query.mock.mockImplementation(() => ({ status: 0, stdout: JSON.stringify(registered) }));
+  writeFileSync(join(app, WINDOWS_REQUIRED_FILES[2]), 'changed');
+  assert.throws(() => paths(root, descriptor), /differs from selected source inventory/);
 });
 
 test('the original server’s exit status reaches the caller; a signal gives 128 + its number', { skip: posixOnly('the managed-copy fixture stands in sh scripts for node.exe') }, async (t) => {

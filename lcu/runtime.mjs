@@ -12,7 +12,7 @@ import { isFile, readJson, real } from './fsutil.mjs';
 import { MAC_SOCKET_ENV, macSocketPath, resolveInstalledLinuxApp, resolveInstalledMacApp } from './platforms.mjs';
 import { configuration as shimConfiguration, CONFIG_ENV as SHIM_CONFIG_ENV, FAULT_ENV as SHIM_FAULT_ENV, SKY_SERVICE } from './sandbox_shim.mjs';
 import { nativeInput } from './tested.mjs';
-import { component, inventorySha256, isRedirected, validateWindowsAppTree } from './windows.mjs';
+import { component, inventorySha256, isRedirected, resolveInstalledWindowsApp, validateWindowsAppTree } from './windows.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // One help text for runtime.mjs and for the launcher, which prints it when the recorded Node is missing.
@@ -25,7 +25,7 @@ const unique = (values) => [...new Set(values)];
 /**
  * Resolve one selected, intact application generation: `{app, resources, runtime, metadata: {version, runtime}}`.
  * Identity, signature and ownership checks run here, once per call. `reuseRecordedChecks` (launches only) lets
- * macOS skip the deep signature check of a build, and Windows the hashing of a private copy, that this account
+ * macOS skip the deep signature check of a build, and Windows the hashing of an app tree that this account
  * already verified and that has not changed since.
  */
 export function paths(root, descriptor = readJson(join(root, 'installation.json')), { reuseRecordedChecks = false } = {}) {
@@ -67,14 +67,17 @@ function windowsPaths(root, lock, descriptor, reuseRecordedInventory) {
       typeof runtime !== 'string' || !runtime || typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) {
     throw new Error('Selected Windows application descriptor is incomplete or unsupported.');
   }
-  const apps = join(dirname(dirname(root)), 'apps');
-  const generation = join(apps, digest);
-  const expected = join(generation, 'app');
-  const inventoryPath = join(generation, 'inventory.json');
-  // Windows paths compare without regard to case, as the file system does.
-  const same = (left, right) => resolve(left).toLowerCase() === resolve(right).toLowerCase();
-  if (!same(selected, expected) || [apps, generation, selected, inventoryPath].some(isRedirected) || !isFile(inventoryPath)) {
+  const inPlace = descriptor.app_source === 'store';
+  const generation = inPlace ? null : join(dirname(dirname(root)), 'apps', digest);
+  const expected = inPlace ? selected : join(generation, 'app');
+  const inventoryPath = inPlace ? join(root, 'app-inventory.json') : join(generation, 'inventory.json');
+  if (!inPlace && (resolve(selected).toLowerCase() !== resolve(expected).toLowerCase() ||
+      [dirname(generation), generation, selected].some(isRedirected))) {
     throw new Error('Selected Windows application is not the managed private generation.');
+  }
+  if (isRedirected(inventoryPath) || !isFile(inventoryPath)) {
+    throw new Error(inPlace ? 'The in-place Windows application inventory is missing or redirected.'
+      : 'Selected Windows application is not the managed private generation.');
   }
   let inventory;
   try {
@@ -83,9 +86,11 @@ function windowsPaths(root, lock, descriptor, reuseRecordedInventory) {
     throw new Error('Managed Windows application inventory is invalid.');
   }
   if (inventorySha256(inventory) !== digest) throw new Error('Managed Windows application inventory does not match its descriptor.');
-  const resolved = validateWindowsAppTree(selected, { expectedVersion: version, expectedRuntime: runtime, expectedInventory: inventory,
-    reuseRecordedInventory });
-  if (resolved.app !== realpathSync(expected)) throw new Error('Selected Windows application does not match the managed generation.');
+  const resolved = inPlace
+    ? resolveInstalledWindowsApp({ app: selected, version, runtime, inventory, reuseRecordedInventory })
+    : validateWindowsAppTree(selected, { expectedVersion: version, expectedRuntime: runtime, expectedInventory: inventory,
+      reuseRecordedInventory });
+  if (!inPlace && resolved.app !== realpathSync(expected)) throw new Error('Selected Windows application does not match the managed generation.');
   return { app: resolved.app, resources: resolved.resources, runtime: resolved.runtime,
     metadata: { version: resolved.version, runtime: resolved.runtimeVersion } };
 }

@@ -1,4 +1,4 @@
-// Validate an official Windows Store package and its intact private copy.
+// Validate an official Windows Store package and its selected runtime tree.
 // Builtins come from process.getBuiltinModule: an ESM import of a builtin builds its export facade, which
 // costs milliseconds on every launch; child_process, crypto and tty are loaded only where they are used.
 const { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync} = process.getBuiltinModule('node:fs');
@@ -147,7 +147,8 @@ export function registeredPackage() {
   const command = "$ErrorActionPreference='Stop'; $packages=@(Get-AppxPackage -Name 'OpenAI.Codex'); " +
     "$packages | Select-Object Name,Publisher,@{Name='Version';Expression={$_.Version.ToString()}}," +
     "@{Name='Architecture';Expression={$_.Architecture.ToString()}}," +
-    "@{Name='SignatureKind';Expression={$_.SignatureKind.ToString()}},InstallLocation | ConvertTo-Json -Compress";
+    "@{Name='SignatureKind';Expression={$_.SignatureKind.ToString()}}," +
+    "@{Name='Status';Expression={$_.Status.ToString()}},IsDevelopmentMode,InstallLocation | ConvertTo-Json -Compress";
   const result = process.getBuiltinModule('node:child_process').spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
     { encoding: 'utf8', timeout: 30_000 });
   if (result.status !== 0) {
@@ -215,19 +216,29 @@ function packageVolumePath(location) {
   return target;
 }
 
-/** Select and structurally validate the current user's official Store app. */
-export function resolveInstalledWindowsApp() {
+/** Select the official Store app, or revalidate the version and inventory of an in-place selection. */
+export function resolveInstalledWindowsApp(selection) {
   validateHost();
   const registered = registeredPackage();
   if (registered.Name !== PACKAGE_NAME || registered.Publisher !== PACKAGE_PUBLISHER ||
       !['x64', 'amd64'].includes(registered.Architecture.toLowerCase()) || registered.SignatureKind !== 'Store') {
     throw new Error('Registered ChatGPT package is not the official Windows x64 Store app.');
   }
+  if (selection && (registered.Status !== 'Ok' || registered.IsDevelopmentMode !== false)) {
+    throw new Error('Registered ChatGPT package is not the intact official Windows x64 Store app.');
+  }
   const location = registered.InstallLocation;
   if (typeof location !== 'string' || !location) throw new Error('Registered ChatGPT package has no install location.');
   const app = packageVolumePath(location);
   const { version } = appxIdentity(app);
   if (registered.Version !== version) throw new Error('Registered ChatGPT package version does not match its identity manifest.');
+  if (selection) {
+    if (version !== selection.version || realpathSync(app).toLowerCase() !== selection.app.toLowerCase()) {
+      throw new Error('The registered ChatGPT Store app changed after selection. Rerun the Windows installer with --in-place.');
+    }
+    return validateWindowsAppTree(app, { expectedVersion: version, expectedRuntime: selection.runtime,
+      expectedInventory: selection.inventory, reuseRecordedInventory: selection.reuseRecordedInventory });
+  }
   // Capture the registered source's exact tree as the baseline for its managed copy. The validator
   // recomputes it before returning the selection.
   return validateWindowsAppTree(app, { expectedVersion: version, expectedRuntime: runtimeManifest(app),
@@ -239,7 +250,7 @@ export function resolveInstalledWindowsApp() {
  * the tree walk (links, junctions, unsupported files) are checked on every call. The inventory is hashed in full
  * unless `reuseRecordedInventory` is set (launches) and this account recorded a match of the same stamps,
  * inventory, version and runtime (inventoryRecord). A full match is recorded unless `recordInventory` is false
- * (the registered source, which LCU never launches), and only when no stamp changed during it.
+ * (initial selection of the registered source), and only when no stamp changed during it.
  */
 export function validateWindowsAppTree(appPath, { expectedVersion, expectedRuntime, expectedInventory, reuseRecordedInventory = false,
   recordInventory = true }) {

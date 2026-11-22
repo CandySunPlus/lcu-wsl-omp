@@ -76,6 +76,19 @@ test('an install copies the app once, records its inventory, Node and launcher, 
   assert.deepEqual(generations(f.prefix), [f.selected.inventoryDigest]);
 });
 
+test('runtime-only in-place install uses the registered app without making a copy', async (t) => {
+  const f = fixture(t);
+  const node = join(f.official, NODE_MEMBER);
+  override(t, deps, 'planOriginalHost', (app, options) => assert.deepEqual([app, options.node], [f.official, node]));
+  override(t, deps, 'materializeOriginalHost', (app) => assert.equal(app, f.official));
+  mockWrite(t, process.stdout, () => true);
+  assert.equal(await main(['--runtime-only', '--in-place', '--prefix', f.prefix]), 0);
+  const release = join(f.prefix, 'releases', current(f.prefix).release);
+  assert.equal(JSON.parse(readFileSync(join(release, 'installation.json'), 'utf8')).app, f.official);
+  assert.ok(readFileSync(join(f.prefix, 'lcu.cmd'), 'utf8').includes(`"${node}"`));
+  assert.equal(existsSync(join(f.prefix, 'apps')), false);
+});
+
 test('a failure after the copy removes the copy and release this run created', async (t) => {
   const f = fixture(t);
   override(t, deps, 'materializeOriginalHost', (app) => {
