@@ -249,6 +249,16 @@ test('the plan is read-only and needs no repository hash; the factory must be un
   for (const body of ['const u=mystery()', 'const u=__dirname']) f.layoutError(f.members(factory(body)), /unresolved identifiers/);
 });
 
+test('host extraction allows guarded browser globals but still requires unsafe references', (t) => {
+  const f = fixture(t);
+  const prelude = 'const root="u">typeof window?window:"u">typeof self&&self;';
+  const host = (code) => `${code}\nfunction Kne(${OPTIONS}){return {closeActiveTurn(){},nativePipeDirectory,probe:root}}`;
+  assert.equal(f.runFactory(f.extract(f.members(host(prelude)))).probe, false);
+  const provided = fixture(t);
+  assert.equal(provided.runFactory(provided.extract(provided.members(host(`const self="provided";${prelude}`)))).probe, 'provided');
+  f.layoutError(f.members(host('const root="u">typeof self?self:window;')), /unresolved identifiers: window/);
+});
+
 test('scope analysis follows real references and ignores shadowed names, keys and properties', () => {
   const prelude = [...'XYZWQLMPKB'].map((name) => `const ${name}=require("electron");`).join('');
   const shadowed = 'const o={X:1,[`k`]:2,Y(){return 1},get Z(){return 1}};const a=o.Z+o?.W+o.M;function inner(X){return X}{let Y=1;Y++}' +

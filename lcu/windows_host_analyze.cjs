@@ -113,6 +113,18 @@ function invokedFunction(callee) {
   return /^(?:Arrow)?FunctionExpression$/.test(target.type) ? target : null;
 }
 
+const isBrowserGlobal = name => name === 'window' || name === 'self';
+const browserGlobalProbe = node => node.type === 'UnaryExpression' && node.operator === 'typeof' &&
+  node.argument.type === 'Identifier' && isBrowserGlobal(node.argument.name);
+
+// The minifier emits `"u" > typeof x` as `typeof x !== "undefined"`.
+// Only the immediate read of that exact identifier is covered by the guard.
+function guardedBrowserGlobal(test, value) {
+  return value.type === 'Identifier' && test.type === 'BinaryExpression' && test.operator === '>' &&
+    test.left.type === 'Literal' && test.left.value === 'u' && browserGlobalProbe(test.right) &&
+    test.right.argument.name === value.name;
+}
+
 class Scan {
   constructor() {
     this.scopes = [];
@@ -137,12 +149,13 @@ class Scan {
     return false;
   }
 
-  ref(name, write) {
+  ref(name, write, optional = false) {
     if (this.bound(name)) return;
     // Dynamic code and an escaping `require` hide dependencies from this static analysis.
     if (name === 'eval') this.problems.add('eval, which makes name resolution dynamic');
     if (name === 'require') this.problems.add('a reference to require other than a require("literal") call');
     this.free.add(name);
+    if (!optional && isBrowserGlobal(name)) (this.unguardedBrowserGlobals ??= new Set()).add(name);
     if (write) this.written.add(name);
   }
 
@@ -261,8 +274,25 @@ class Scan {
   }
 
   onUnaryExpression(node) {
+    if (browserGlobalProbe(node)) {
+      this.ref(node.argument.name, false, true);
+      return;
+    }
     if (node.operator === 'delete') this.noteMemberWrite(node.argument);
     this.visit(node.argument);
+  }
+
+  onConditionalExpression(node) {
+    this.visit(node.test);
+    if (guardedBrowserGlobal(node.test, node.consequent)) this.ref(node.consequent.name, false, true);
+    else this.visit(node.consequent);
+    this.visit(node.alternate);
+  }
+
+  onLogicalExpression(node) {
+    this.visit(node.left);
+    if (node.operator === '&&' && guardedBrowserGlobal(node.left, node.right)) this.ref(node.right.name, false, true);
+    else this.visit(node.right);
   }
 
   onCallExpression(node) {
@@ -433,6 +463,7 @@ function entriesOf(program, webpackRequire) {
   const newScan = () => Object.assign(new Scan(), {webpackRequire});
   const add = (entry, scan) => {
     entry.free = scan.free; entry.written = scan.written;
+    entry.unguardedBrowserGlobals = scan.unguardedBrowserGlobals;
     entry.requires = scan.requires; entry.imports = scan.imports; entry.problems = scan.problems;
     entry.memberWritten = scan.memberWritten;
     entry.eager = scan.eager; entry.lazy = scan.lazy;
@@ -587,7 +618,8 @@ function hostModule(source, webpackRequire = null) {
         if (providers.has(name)) {
           for (const provider of providers.get(name)) take(provider);
           for (const assignment of assignments.get(name) || []) take(assignment);
-        } else if (name !== 'require' && !(name in globalThis)) {
+        } else if (name !== 'require' && !(name in globalThis) &&
+          (!isBrowserGlobal(name) || entry.unguardedBrowserGlobals?.has(name))) {
           unresolved.add(name);
         }
       }
