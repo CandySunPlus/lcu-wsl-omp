@@ -22,6 +22,19 @@ cd lcu-wsl-omp
 
 The script uses WSL interoperability, Python 3.12+, Node 22.15+, and npm. It rebuilds the thin Windows candidate from this checkout, runs the `--runtime-only --in-place` installer against the existing prefix, and runs `lcu doctor`. It does not copy the ChatGPT app, register agents, or change approvals. Restart omp after a successful refresh. If a new Store layout is incompatible, the installer fails without falling back to a full copy.
 
+## Sync a new upstream release
+
+From a clean checkout of this repository, with Node and the GitHub CLI available, run:
+
+```sh
+./scripts/sync-upstream.sh          # latest upstream release
+./scripts/sync-upstream.sh v0.15.0  # or an explicit stable tag; no GitHub CLI needed
+```
+
+When a release is new to `origin/main`, the script creates a local `sync-upstream/<tag>` branch from `origin/main`, merges the upstream tag, and runs the Windows compatibility tests. It does not change `main`, push to GitHub, or touch the installed runtime. If Git reports conflicts, resolve them on the sync branch and rerun the compatibility tests before publishing it.
+
+Before merging the branch into `main`, verify on Windows and WSL that LCU launches in place, `lcu doctor` lists windows, omp can connect, and no ChatGPT copy is created. After the verified branch is merged, switch back to `main`, pull, and run `./scripts/refresh-wsl-omp.sh`.
+
 ## Quick start
 
 Copy this into your agent:
