@@ -23,6 +23,8 @@ git pull --ff-only
 
 The script builds the thin Windows candidate using Python 3.12+, Node 22.15+, and npm, installs it in place, and runs `lcu doctor`. It then relinks the matching adapter with `--chrome` for only the selected omp profile (default unless `OMP_PROFILE` selects another one). It keeps the official ChatGPT Chrome extension, native host, and site approvals unchanged. It neither copies ChatGPT nor falls back to a full copy if the new layout is incompatible. Restart omp afterwards.
 
+After `doctor` and the omp relink succeed, the script keeps the current Windows LCU release plus the most recent previous release and deletes older managed releases. It also deletes older WSL adapters that no omp profile references. If the Windows runtime may still be in use, cleanup is deferred until a later refresh. This never deletes the Store app or browser data.
+
 ## Sync a new upstream release
 
 From a clean checkout of this repository, with Node and the GitHub CLI available, run:
