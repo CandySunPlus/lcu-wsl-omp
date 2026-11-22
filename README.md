@@ -22,6 +22,16 @@ cd lcu-wsl-omp
 
 The script uses WSL interoperability, Python 3.12+, Node 22.15+, and npm. It rebuilds the thin Windows candidate from this checkout, runs the `--runtime-only --in-place` installer against the existing prefix, and runs `lcu doctor`. It does not copy the ChatGPT app, register agents, or change approvals. Restart omp after a successful refresh. If a new Store layout is incompatible, the installer fails without falling back to a full copy.
 
+## Preserve Chrome control for WSL omp
+
+Runtime refreshes leave the omp plugin registration alone, so an existing Chrome opt-in stays enabled. To restore it or relink the selected omp profile after an adapter update, run in WSL:
+
+```sh
+./scripts/enable-wsl-omp-chrome.sh
+```
+
+This uses the existing in-place Windows LCU installation and configures only the selected omp profile to launch it with `--chrome`. It keeps the official ChatGPT Chrome extension and its native host unchanged. It does not run `lcu browser install`, write browser registration or site approvals, or copy ChatGPT. Restart omp afterwards. Open a harmless page in Windows Chrome and approve only that site when testing page access.
+
 ## Sync a new upstream release
 
 From a clean checkout of this repository, with Node and the GitHub CLI available, run:
