@@ -12,25 +12,16 @@ LCU exposes Codex's original computer-use runtime to your harness without requir
 
 ## Refresh the Windows runtime from WSL
 
-This repository extends [upstream LCU](https://github.com/amontlabs/lcu) to use the registered Windows Store ChatGPT app in place. For an existing WSL Oh My Pi installation using `%LOCALAPPDATA%\LCU-OMP-WSL`, close the omp sessions that use LCU before updating ChatGPT. After the Store update, run from WSL:
+This repository extends [upstream LCU](https://github.com/amontlabs/lcu) to use the registered Windows Store ChatGPT app in place. For an existing WSL Oh My Pi installation using `%LOCALAPPDATA%\LCU-OMP-WSL`, close the omp sessions that use LCU. To refresh after a ChatGPT Store update or an LCU update, run from WSL:
 
 ```sh
 git clone https://github.com/CandySunPlus/lcu-wsl-omp.git  # first time only
 cd lcu-wsl-omp
+git pull --ff-only
 ./scripts/refresh-wsl-omp.sh
 ```
 
-The script uses WSL interoperability, Python 3.12+, Node 22.15+, and npm. It rebuilds the thin Windows candidate from this checkout, runs the `--runtime-only --in-place` installer against the existing prefix, and runs `lcu doctor`. It does not copy the ChatGPT app, register agents, or change approvals. Restart omp after a successful refresh. If a new Store layout is incompatible, the installer fails without falling back to a full copy.
-
-## Preserve Chrome control for WSL omp
-
-Runtime refreshes leave the omp plugin registration alone, so an existing Chrome opt-in stays enabled. To restore it or relink the selected omp profile after an adapter update, run in WSL:
-
-```sh
-./scripts/enable-wsl-omp-chrome.sh
-```
-
-This uses the existing in-place Windows LCU installation and configures only the selected omp profile to launch it with `--chrome`. It keeps the official ChatGPT Chrome extension and its native host unchanged. It does not run `lcu browser install`, write browser registration or site approvals, or copy ChatGPT. Restart omp afterwards. Open a harmless page in Windows Chrome and approve only that site when testing page access.
+The script builds the thin Windows candidate using Python 3.12+, Node 22.15+, and npm, installs it in place, and runs `lcu doctor`. It then relinks the matching adapter with `--chrome` for only the selected omp profile (default unless `OMP_PROFILE` selects another one). It keeps the official ChatGPT Chrome extension, native host, and site approvals unchanged. It neither copies ChatGPT nor falls back to a full copy if the new layout is incompatible. Restart omp afterwards.
 
 ## Sync a new upstream release
 
