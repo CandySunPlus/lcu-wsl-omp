@@ -10,6 +10,18 @@ https://github.com/user-attachments/assets/bd9d0809-8a6c-4931-a51c-b98daf05cb5f
 
 LCU exposes Codex's original computer-use runtime to your harness without requiring Codex authentication. The official ChatGPT desktop app must still be installed locally: it supplies the runtime and instructions, while LCU handles setup and harness integration.
 
+## Refresh the Windows runtime from WSL
+
+This repository extends [upstream LCU](https://github.com/amontlabs/lcu) to use the registered Windows Store ChatGPT app in place. For an existing WSL Oh My Pi installation using `%LOCALAPPDATA%\LCU-OMP-WSL`, close the omp sessions that use LCU before updating ChatGPT. After the Store update, run from WSL:
+
+```sh
+git clone https://github.com/CandySunPlus/lcu-wsl-omp.git  # first time only
+cd lcu-wsl-omp
+./scripts/refresh-wsl-omp.sh
+```
+
+The script uses WSL interoperability, Python 3.12+, Node 22.15+, and npm. It rebuilds the thin Windows candidate from this checkout, runs the `--runtime-only --in-place` installer against the existing prefix, and runs `lcu doctor`. It does not copy the ChatGPT app, register agents, or change approvals. Restart omp after a successful refresh. If a new Store layout is incompatible, the installer fails without falling back to a full copy.
+
 ## Quick start
 
 Copy this into your agent:
